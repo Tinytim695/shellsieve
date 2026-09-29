@@ -58,6 +58,36 @@ def tags(cmd):
  if "powershell" in c and re.search(r"-enc(?:odedcommand)?\b",c,re.I): out.append("encoded-powershell")
  return sorted(set(out))
 
+def make_sessions(entries, gap_seconds=1800):
+    sessions = []
+    current = []
+    last_timestamp = None
+    for index, entry in enumerate(entries, 1):
+        ts = entry.get("timestamp")
+        if current and ts is not None and last_timestamp is not None and ts - last_timestamp > gap_seconds:
+            sessions.append(current)
+            current = []
+        current.append(index)
+        if ts is not None:
+            last_timestamp = ts
+    if current:
+        sessions.append(current)
+    return sessions
+
+def analyse(entries):
+    findings = []
+    previous = None
+    for i, entry in enumerate(entries, 1):
+        ts = entry.get("timestamp")
+        if ts is not None and previous is not None and ts < previous:
+            findings.append({"type":"timestamp-regression","entry":i})
+        if ts is not None:
+            previous = ts
+        for tag in tags(entry["command"]):
+            findings.append({"type":tag,"entry":i,"command":redact(entry["command"])})
+    sessions = make_sessions(entries)
+    return sessions, findings
+
 def main():
  ap=argparse.ArgumentParser(description="ShellSieve local shell history triage")
  ap.add_argument("history"); ap.add_argument("--format",choices=["auto","bash","zsh","plain"],default="auto")
@@ -65,13 +95,8 @@ def main():
  a=ap.parse_args(); p=Path(a.history)
  if not p.is_file(): raise SystemExit("history file not found: "+str(p))
  entries,fmt=parse(p.read_text(errors="replace"),a.format)
- findings=[]; prev=None
- for i,e in enumerate(entries,1):
-  ts=e["timestamp"]
-  if ts is not None and prev is not None and ts<prev: findings.append({"type":"timestamp-regression","entry":i})
-  if ts is not None: prev=ts
-  for t in tags(e["command"]): findings.append({"type":t,"entry":i,"command":redact(e["command"])})
- report={"file":str(p.resolve()),"format":fmt,"entries":len(entries),"findings":findings}
+ sessions,findings=analyse(entries)
+ report={"file":str(p.resolve()),"format":fmt,"entries":len(entries),"sessions":len(sessions),"findings":findings}
  if a.json: Path(a.json).write_text(json.dumps(report,indent=2))
  if a.markdown:
   lines=["# ShellSieve report","",f"File: {report['file']}",f"Format: {fmt}",f"Entries: {len(entries)}","", "## Findings"]
@@ -80,6 +105,7 @@ def main():
  print("ShellSieve")
  print("Format:",fmt)
  print("Entries:",len(entries))
+ print("Sessions:",len(sessions))
  print("Findings:",len(findings))
  for f in findings[:20]: print(" -",f["type"],"entry",f["entry"])
 
