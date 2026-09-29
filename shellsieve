@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse,json,re
+import argparse,json,re,sys
 from pathlib import Path
 
 secret_patterns=[
@@ -93,7 +93,7 @@ def main():
  ap.add_argument("history"); ap.add_argument("--format",choices=["auto","bash","zsh","plain"],default="auto")
  ap.add_argument("--json"); ap.add_argument("--markdown")
  a=ap.parse_args(); p=Path(a.history)
- if not p.is_file(): raise SystemExit("history file not found: "+str(p))
+ if not p.is_file():\n  print("history file not found: "+str(p),file=sys.stderr)\n  return 2
  entries,fmt=parse(p.read_text(errors="replace"),a.format)
  sessions,findings=analyse(entries)
  report={"file":str(p.resolve()),"format":fmt,"entries":len(entries),"sessions":len(sessions),"findings":findings}
@@ -109,4 +109,4 @@ def main():
  print("Findings:",len(findings))
  for f in findings[:20]: print(" -",f["type"],"entry",f["entry"])
 
-if __name__=="__main__": main()
+if __name__=="__main__": raise SystemExit(main())
