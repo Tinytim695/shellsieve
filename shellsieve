@@ -93,7 +93,9 @@ def main():
  ap.add_argument("history"); ap.add_argument("--format",choices=["auto","bash","zsh","plain"],default="auto")
  ap.add_argument("--json"); ap.add_argument("--markdown")
  a=ap.parse_args(); p=Path(a.history)
- if not p.is_file():\n  print("history file not found: "+str(p),file=sys.stderr)\n  return 2
+ if not p.is_file():
+  print("history file not found: "+str(p),file=sys.stderr)
+  return 2
  entries,fmt=parse(p.read_text(errors="replace"),a.format)
  sessions,findings=analyse(entries)
  report={"file":str(p.resolve()),"format":fmt,"entries":len(entries),"sessions":len(sessions),"findings":findings}
