@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+import argparse,json,re
+from pathlib import Path
+
+secret_patterns=[
+ re.compile(r"(?i)(api[_-]?key|token|password|passwd|secret|authorization|bearer)\s*[:=]\s*[^\s]+"),
+ re.compile(r"(?i)\bghp_[A-Za-z0-9]{20,}\b"),
+ re.compile(r"(?i)\bsk-[A-Za-z0-9]{20,}\b"),
+]
+
+def redact(s):
+ for rx in secret_patterns:
+  s=rx.sub("[REDACTED]",s)
+ return s
+
+def parse(text,fmt):
+ lines=text.splitlines()
+ if fmt=="auto":
+  if any(re.match(r"^: \d+:\d+;",x) for x in lines[:10]): fmt="zsh"
+  elif any(re.match(r"^#\d+$",x) for x in lines[:10]): fmt="bash"
+  else: fmt="plain"
+ out=[]
+ if fmt=="zsh":
+  rx=re.compile(r"^: (\d+):(\d+);(.*)$")
+  for line in lines:
+   m=rx.match(line)
+   if m: out.append({"timestamp":int(m.group(1)),"command":m.group(3),"shell":"zsh"})
+   elif out: out[-1]["command"]+="\n"+line
+ elif fmt=="bash":
+  cur=None
+  for line in lines:
+   m=re.match(r"^#(\d+)$",line)
+   if m:
+    if cur: out.append(cur)
+    cur={"timestamp":int(m.group(1)),"command":"","shell":"bash"}
+   elif cur is not None:
+    cur["command"]+=("\n" if cur["command"] else "")+line
+  if cur: out.append(cur)
+ else:
+  out=[{"timestamp":None,"command":x,"shell":"plain"} for x in lines if x.strip()]
+ return out,fmt
+
+def tags(cmd):
+ c=cmd.lower(); out=[]
+ families={
+  "network":["curl ","wget ","ssh ","scp ","nc ","ncat ","http://","https://"],
+  "package":["apt ","apt-get ","pip ","pipx ","npm ","cargo ","go install"],
+  "filesystem":["rm ","mv ","cp ","chmod ","chown ","find ","dd "],
+  "privilege":["sudo ","su ","doas ","pkexec"],
+  "process":["ps ","top ","htop ","kill ","pkill "],
+  "git":["git "],
+ }
+ for family,needles in families.items():
+  if any(n in c for n in needles): out.append(family)
+ if re.search(r"\b(curl|wget)\b[^|\n]*\|\s*(sh|bash|zsh|python|perl)\b",cmd,re.I): out.append("download-pipe-exec")
+ if re.search(r"\bhistory\s+-c\b|\bunset\s+histfile\b|\bexport\s+histfile=/dev/null",cmd,re.I): out.append("history-control")
+ if re.search(r"\b(rm\s+-rf|mkfs|dd\s+if=|shred\s+)",cmd,re.I): out.append("destructive-candidate")
+ if "powershell" in c and re.search(r"-enc(?:odedcommand)?\b",c,re.I): out.append("encoded-powershell")
+ return sorted(set(out))
+
+def main():
+ ap=argparse.ArgumentParser(description="ShellSieve local shell history triage")
+ ap.add_argument("history"); ap.add_argument("--format",choices=["auto","bash","zsh","plain"],default="auto")
+ ap.add_argument("--json"); ap.add_argument("--markdown")
+ a=ap.parse_args(); p=Path(a.history)
+ if not p.is_file(): raise SystemExit("history file not found: "+str(p))
+ entries,fmt=parse(p.read_text(errors="replace"),a.format)
+ findings=[]; prev=None
+ for i,e in enumerate(entries,1):
+  ts=e["timestamp"]
+  if ts is not None and prev is not None and ts<prev: findings.append({"type":"timestamp-regression","entry":i})
+  if ts is not None: prev=ts
+  for t in tags(e["command"]): findings.append({"type":t,"entry":i,"command":redact(e["command"])})
+ report={"file":str(p.resolve()),"format":fmt,"entries":len(entries),"findings":findings}
+ if a.json: Path(a.json).write_text(json.dumps(report,indent=2))
+ if a.markdown:
+  lines=["# ShellSieve report","",f"File: {report['file']}",f"Format: {fmt}",f"Entries: {len(entries)}","", "## Findings"]
+  lines += [f"- {f['type']} at entry {f['entry']}" for f in findings]
+  Path(a.markdown).write_text("\n".join(lines)+"\n")
+ print("ShellSieve")
+ print("Format:",fmt)
+ print("Entries:",len(entries))
+ print("Findings:",len(findings))
+ for f in findings[:20]: print(" -",f["type"],"entry",f["entry"])
+
+if __name__=="__main__": main()
